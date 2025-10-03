@@ -1,0 +1,1380 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MindEase</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap');
+        body {
+            font-family: 'Inter', sans-serif;
+        }
+        .message-box {
+            position: fixed;
+            top: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            z-index: 1000;
+            padding: 1rem 2rem;
+            border-radius: 9999px;
+            background-color: #4f46e5;
+            color: white;
+            font-weight: 600;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+            transition: all 0.5s ease-in-out;
+            opacity: 0;
+            visibility: hidden;
+        }
+        .message-box.show {
+            opacity: 1;
+            visibility: visible;
+        }
+        /* Custom styles for word cloud */
+        .word-cloud-container {
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: center;
+            align-items: center;
+            height: 200px;
+            background-color: #f1f5f9;
+            border-radius: 0.5rem;
+            padding: 1rem;
+        }
+        .word-cloud-item {
+            padding: 0.25rem 0.5rem;
+            margin: 0.25rem;
+            border-radius: 9999px;
+            color: #4f46e5;
+            background-color: #e0e7ff;
+        }
+    </style>
+    <!-- Firebase and other Libraries -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut, onAuthStateChanged, signInAnonymously, updatePassword } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, doc, setDoc, getDoc, collection, query, where, onSnapshot, addDoc, updateDoc, getDocs } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        import * as Chart from 'https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js';
+        
+        window.firebase = { initializeApp, getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut, onAuthStateChanged, signInAnonymously, updatePassword, getFirestore, collection, onSnapshot, addDoc, doc, setDoc, getDoc, query, where, Chart, updateDoc, getDocs };
+    </script>
+</head>
+<body class="bg-gray-100 flex flex-col items-center p-4 min-h-screen">
+    <div id="message-box" class="message-box"></div>
+    <header class="w-full max-w-2xl bg-white rounded-xl shadow-lg p-4 mb-4 flex justify-between items-center">
+        <h1 class="text-3xl font-bold text-indigo-600">MindEase</h1>
+        <button id="logout-btn" class="hidden text-sm px-4 py-2 bg-indigo-500 text-white rounded-full hover:bg-indigo-600 transition-colors">Logout</button>
+    </header>
+
+    <main id="app-content" class="w-full max-w-2xl bg-white rounded-xl shadow-lg p-6 flex-grow">
+        <!-- Content will be injected here -->
+    </main>
+
+    <div id="navigation" class="hidden fixed bottom-0 left-0 right-0 z-10 w-full bg-white shadow-xl rounded-t-2xl p-4 flex justify-around">
+        <!-- Navigation buttons will be injected here -->
+    </div>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+          const firebaseConfig = {
+  apiKey: "AIzaSyCA03QQDxMoB01tSGEfZOn1fi-u0b3v_x4",
+  authDomain: "mindease-67b7d.firebaseapp.com",
+  projectId: "mindease-67b7d",
+  storageBucket: "mindease-67b7d.firebasestorage.app",
+  messagingSenderId: "124555567380",
+  appId: "1:124555567380:web:96e1ae1ff02b88a8d7e201"
+};
+
+            const appId = "mindease-pwa-html-v10";
+            let db, auth, userId;
+            let moodData = [];
+            let chartInstance = null;
+            let customAffirmations = [];
+            let habits = [];
+            let journalEntries = [];
+            let userProfile = {};
+            let isEmailUser = false;
+
+            const moodEmojis = {
+                'happy': {emoji: '😊', value: 5},
+                'calm': {emoji: '😌', value: 4},
+                'neutral': {emoji: '😐', value: 3},
+                'sad': {emoji: '😞', value: 2},
+                'anxious': {emoji: '😰', value: 1},
+            };
+
+            const defaultAffirmations = [
+                "I am capable of amazing things.",
+                "My feelings are valid, and I am in control of my reactions.",
+                "I am enough, just as I am.",
+                "Every day is a new opportunity for growth.",
+                "I choose to be positive and grateful today."
+            ];
+
+            // Helper Functions
+            const showMessage = (message, duration = 3000) => {
+                const msgBox = document.getElementById('message-box');
+                msgBox.textContent = message;
+                msgBox.classList.add('show');
+                setTimeout(() => {
+                    msgBox.classList.remove('show');
+                }, duration);
+            };
+
+            const initFirebase = async () => {
+                try {
+                    const app = firebase.initializeApp(firebaseConfig);
+                    auth = firebase.getAuth(app);
+                    db = firebase.getFirestore(app);
+
+                    firebase.onAuthStateChanged(auth, async (user) => {
+                        if (user) {
+                            userId = user.uid;
+                            isEmailUser = user.providerData.some(p => p.providerId === 'password');
+                            document.getElementById('logout-btn').classList.remove('hidden');
+                            document.getElementById('navigation').classList.remove('hidden');
+                            // Ensure Home is rendered first on auth change
+                            fetchUserProfile();
+                            renderHome(); 
+                            fetchMoodData();
+                            fetchAffirmations();
+                            fetchHabits();
+                            fetchJournalEntries();
+                        } else {
+                            userId = null;
+                            document.getElementById('logout-btn').classList.add('hidden');
+                            document.getElementById('navigation').classList.add('hidden');
+                            renderAuthForm(true);
+                        }
+                    });
+                    await firebase.signInAnonymously(auth);
+                } catch (error) {
+                    console.error("Error initializing Firebase:", error);
+                    showMessage("Error initializing app. Check console for details.", 5000);
+                }
+            };
+            
+            const fetchUserProfile = () => {
+                if (!db || !userId) return;
+                const userDocRef = firebase.doc(db, `/artifacts/${appId}/users/${userId}/profile`, 'details');
+
+                firebase.onSnapshot(userDocRef, (doc) => {
+                    if (doc.exists()) {
+                        userProfile = { id: doc.id, ...doc.data() };
+                    } else {
+                        userProfile = {};
+                    }
+                    if (document.getElementById('user-profile-name')) {
+                        renderProfile();
+                    }
+                }, (error) => {
+                    console.error("Error fetching user profile:", error);
+                });
+            };
+            
+            const fetchMoodData = () => {
+                if (!db || !userId) return;
+                const moodCollectionPath = `/artifacts/${appId}/users/${userId}/mood_entries`;
+                const q = firebase.query(firebase.collection(db, moodCollectionPath));
+
+                firebase.onSnapshot(q, (querySnapshot) => {
+                    moodData = [];
+                    querySnapshot.forEach((doc) => {
+                        moodData.push({ id: doc.id, ...doc.data() });
+                    });
+                    moodData.sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+                    
+                    if (document.getElementById('mood-chart')) {
+                        updateMoodChart();
+                    }
+                    if (document.getElementById('mood-history')) {
+                        renderMoodHistory();
+                    }
+                    if (document.getElementById('mood-streak')) {
+                        renderMoodStreak();
+                    }
+                    if (document.getElementById('daily-insights')) {
+                        renderDailySummary();
+                    }
+                    if (document.getElementById('badges-container')) {
+                        renderBadges();
+                    }
+                }, (error) => {
+                    console.error("Error fetching mood data:", error);
+                });
+            };
+
+            const fetchAffirmations = () => {
+                if (!db || !userId) return;
+                const affirmationsCollectionPath = `/artifacts/${appId}/users/${userId}/affirmations`;
+                const q = firebase.query(firebase.collection(db, affirmationsCollectionPath));
+                
+                firebase.onSnapshot(q, (querySnapshot) => {
+                    customAffirmations = [];
+                    querySnapshot.forEach((doc) => {
+                        customAffirmations.push(doc.data().text);
+                    });
+                    if (document.getElementById('affirmation-text')) {
+                         renderAffirmations();
+                    }
+                }, (error) => {
+                    console.error("Error fetching affirmations:", error);
+                });
+            };
+
+            const fetchHabits = () => {
+                if (!db || !userId) return;
+                const habitsCollectionPath = `/artifacts/${appId}/users/${userId}/habits`;
+                const q = firebase.query(firebase.collection(db, habitsCollectionPath));
+                
+                firebase.onSnapshot(q, async (querySnapshot) => {
+                    const fetchedHabits = [];
+                    const today = new Date().toISOString().split('T')[0];
+                    for (const doc of querySnapshot.docs) {
+                        const habit = { id: doc.id, ...doc.data(), completed: false };
+                        
+                        try {
+                            const entryDoc = await firebase.getDoc(firebase.doc(db, habitsCollectionPath, doc.id, 'entries', today));
+                            if (entryDoc.exists() && entryDoc.data().completed) {
+                                habit.completed = true;
+                            }
+                        } catch (error) {
+                            console.error("Error fetching habit entry:", error);
+                        }
+                        fetchedHabits.push(habit);
+                    }
+                    habits = fetchedHabits;
+                    if (document.getElementById('habit-list')) {
+                        renderHabitList();
+                    }
+                    if (document.getElementById('daily-insights')) {
+                        renderDailySummary();
+                    }
+                }, (error) => {
+                    console.error("Error fetching habits:", error);
+                });
+            };
+
+            const fetchJournalEntries = () => {
+                if (!db || !userId) return;
+                const journalCollectionPath = `/artifacts/${appId}/users/${userId}/journal`;
+                const q = firebase.query(firebase.collection(db, journalCollectionPath));
+                
+                firebase.onSnapshot(q, (querySnapshot) => {
+                    journalEntries = [];
+                    querySnapshot.forEach((doc) => {
+                        journalEntries.push({ id: doc.id, ...doc.data() });
+                    });
+                    if (document.getElementById('journal-list')) {
+                        renderJournalEntries();
+                    }
+                }, (error) => {
+                    console.error("Error fetching journal entries:", error);
+                });
+            };
+
+            const generateWordCloud = (text) => {
+                const words = text.toLowerCase().match(/\b(\w+)\b/g) || [];
+                const wordCounts = {};
+                const stopWords = new Set([
+                    'i', 'me', 'my', 'myself', 'we', 'our', 'ours', 'ourselves', 'you', 'your', 'yours', 'yourself', 'yourselves',
+                    'he', 'him', 'his', 'himself', 'she', 'her', 'hers', 'herself', 'it', 'its', 'itself', 'they', 'them',
+                    'their', 'theirs', 'themselves', 'what', 'which', 'who', 'whom', 'this', 'that', 'these', 'those', 'am',
+                    'is', 'are', 'was', 'were', 'be', 'been', 'being', 'have', 'has', 'had', 'having', 'do', 'does', 'did',
+                    'doing', 'a', 'an', 'the', 'and', 'but', 'if', 'or', 'because', 'as', 'until', 'while', 'of', 'at', 'by',
+                    'for', 'with', 'about', 'against', 'between', 'into', 'through', 'during', 'before', 'after', 'above',
+                    'below', 'to', 'from', 'up', 'down', 'in', 'out', 'on', 'off', 'over', 'under', 'again', 'further',
+                    'then', 'once', 'here', 'there', 'when', 'where', 'why', 'how', 'all', 'any', 'both', 'each', 'few',
+                    'more', 'most', 'other', 'some', 'such', 'no', 'nor', 'not', 'only', 'own', 'same', 'so', 'than', 'too',
+                    'very', 's', 't', 'can', 'will', 'just', 'don', 'should', 'now', 'today'
+                ]);
+
+                words.forEach(word => {
+                    if (!stopWords.has(word) && word.length > 2) {
+                        wordCounts[word] = (wordCounts[word] || 0) + 1;
+                    }
+                });
+
+                const sortedWords = Object.entries(wordCounts).sort(([, a], [, b]) => b - a).slice(0, 20);
+                const wordCloudContainer = document.getElementById('word-cloud-container');
+                wordCloudContainer.innerHTML = sortedWords.map(([word, count]) => {
+                    const fontSize = 10 + (count * 2);
+                    return `<span class="word-cloud-item" style="font-size:${fontSize}px;">${word}</span>`;
+                }).join('');
+            };
+
+
+            const updateMoodChart = () => {
+                const ctx = document.getElementById('mood-chart').getContext('2d');
+                if (chartInstance) {
+                    chartInstance.destroy();
+                }
+
+                const labels = moodData.map(entry => {
+                    const date = new Date(entry.timestamp);
+                    return `${date.getMonth()+1}/${date.getDate()}`;
+                });
+                const data = moodData.map(entry => entry.moodValue);
+
+                chartInstance = new firebase.Chart(ctx, {
+                    type: 'line',
+                    data: {
+                        labels: labels,
+                        datasets: [{
+                            label: 'Mood Over Time',
+                            data: data,
+                            borderColor: '#4f46e5',
+                            backgroundColor: 'rgba(79, 70, 229, 0.2)',
+                            fill: true,
+                            tension: 0.4
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        scales: {
+                            y: {
+                                beginAtZero: true,
+                                max: 5,
+                                ticks: {
+                                    callback: function(value) {
+                                        const moodLabel = Object.keys(moodEmojis).find(key => moodEmojis[key].value === value);
+                                        return moodLabel ? `${moodEmojis[moodLabel].emoji} ${moodLabel}` : '';
+                                    }
+                                }
+                            }
+                        },
+                        plugins: {
+                            tooltip: {
+                                callbacks: {
+                                    label: function(context) {
+                                        let label = context.dataset.label || '';
+                                        if (label) {
+                                            label += ': ';
+                                        }
+                                        const value = context.parsed.y;
+                                        const moodLabel = Object.keys(moodEmojis).find(key => moodEmojis[key].value === value);
+                                        if (moodLabel) {
+                                            label += `${moodEmojis[moodLabel].emoji} ${moodLabel}`;
+                                        }
+                                        return label;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                });
+            };
+            
+            const renderMoodHistory = () => {
+                const historyContainer = document.getElementById('mood-history');
+                if (historyContainer) {
+                    if (moodData.length === 0) {
+                        historyContainer.innerHTML = `<p class="text-center text-gray-500">No past entries to display.</p>`;
+                    } else {
+                        historyContainer.innerHTML = moodData.reverse().map(entry => `
+                            <div class="p-4 bg-gray-50 rounded-xl shadow-sm mb-2">
+                                <div class="flex items-center justify-between mb-2">
+                                    <span class="text-sm font-semibold text-gray-700">${new Date(entry.timestamp).toLocaleDateString()}</span>
+                                    <span class="text-2xl">${moodEmojis[entry.mood].emoji}</span>
+                                </div>
+                                <p class="text-gray-600 italic">${entry.journal || 'No journal entry.'}</p>
+                            </div>
+                        `).join('');
+                    }
+                }
+            };
+
+            const calculateMoodStreak = () => {
+                if (moodData.length < 2) {
+                    return moodData.length > 0 ? 1 : 0;
+                }
+                let streak = 0;
+                let lastDate = null;
+                const sortedData = [...moodData].sort((a,b) => new Date(b.timestamp) - new Date(a.timestamp));
+                for(const entry of sortedData) {
+                    const currentDate = new Date(entry.timestamp);
+                    currentDate.setHours(0, 0, 0, 0); // Normalize date to compare
+                    
+                    if (!lastDate) {
+                        lastDate = currentDate;
+                        streak = 1;
+                        continue;
+                    }
+
+                    const timeDiff = lastDate.getTime() - currentDate.getTime();
+                    const dayDiff = timeDiff / (1000 * 3600 * 24);
+
+                    if (dayDiff === 1) {
+                        streak++;
+                        lastDate = currentDate;
+                    } else if (dayDiff === 0) {
+                        continue; // Same day, ignore
+                    } else {
+                        break; // Streak broken
+                    }
+                }
+                return streak;
+            };
+
+            const renderMoodStreak = () => {
+                const streak = calculateMoodStreak();
+                const streakEl = document.getElementById('mood-streak');
+                if(streakEl) {
+                    streakEl.innerHTML = `
+                        <div class="flex items-center space-x-2">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="text-yellow-500"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><line x1="10" y1="9" x2="8" y2="9"/></svg>
+                            <span class="font-semibold text-gray-700">${streak} Day${streak === 1 ? '' : 's'} Streak!</span>
+                        </div>
+                    `;
+                }
+            };
+            
+            const renderDailySummary = () => {
+                const dailySummaryEl = document.getElementById('daily-insights');
+                if (!dailySummaryEl) return;
+
+                let moodMessage = "You haven't logged your mood today.";
+                const todayMood = moodData.find(entry => new Date(entry.timestamp).toLocaleDateString() === new Date().toLocaleDateString());
+                if (todayMood) {
+                    const moodLabel = moodEmojis[todayMood.mood].emoji;
+                    moodMessage = `Your mood today is: ${moodLabel} ${todayMood.mood}.`;
+                }
+
+                const completedHabits = habits.filter(h => h.completed).map(h => h.name);
+                let habitMessage = "You haven't completed any habits today.";
+                if (completedHabits.length > 0) {
+                    habitMessage = `You completed ${completedHabits.length} habit${completedHabits.length === 1 ? '' : 's'}.`;
+                }
+
+                dailySummaryEl.innerHTML = `
+                    <div class="p-4 bg-indigo-50 rounded-xl shadow-sm text-center">
+                        <h3 class="font-semibold text-indigo-700 mb-2">Daily Insights</h3>
+                        <p class="text-sm text-gray-600 mb-1">${moodMessage}</p>
+                        <p class="text-sm text-gray-600">${habitMessage}</p>
+                    </div>
+                `;
+            };
+            
+            const renderBadges = () => {
+                const badgesEl = document.getElementById('badges-container');
+                if (!badgesEl) return;
+                
+                const badges = [];
+                // Badge 1: First Mood Log
+                if (moodData.length > 0) {
+                    badges.push({ name: 'First Mood Log', icon: `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="text-yellow-500"><path d="M22 10s-2-2-4-2-3 2-4 2-3-2-4-2-4 2-4 2c-2 0-4-2-4-2"/><path d="M14 14l-2 2-2-2"/></svg>` });
+                }
+                // Badge 2: 7-Day Streak
+                if (calculateMoodStreak() >= 7) {
+                    badges.push({ name: '7-Day Streak', icon: `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="text-yellow-500"><path d="M12 2a10 10 0 1 0 10 10A10 10 0 0 0 12 2z"/><path d="M12 6v6l4 2"/></svg>` });
+                }
+
+                if (badges.length > 0) {
+                    badgesEl.innerHTML = `
+                        <h3 class="text-xl font-semibold mb-2 text-gray-800">Your Badges</h3>
+                        <div class="grid grid-cols-2 gap-4">
+                            ${badges.map(badge => `
+                                <div class="bg-gray-50 rounded-xl p-4 shadow-sm flex items-center space-x-2">
+                                    ${badge.icon}
+                                    <span class="text-sm font-semibold text-gray-700">${badge.name}</span>
+                                </div>
+                            `).join('')}
+                        </div>
+                    `;
+                } else {
+                    badgesEl.innerHTML = `<p class="text-center text-gray-500">No badges earned yet. Keep using the app!</p>`;
+                }
+            };
+
+
+            const navigate = (page) => {
+                switch (page) {
+                    case 'home':
+                        renderHome();
+                        break;
+                    case 'mood-tracking':
+                        renderMoodTracker();
+                        break;
+                    case 'ai-chat':
+                        renderAIChat();
+                        break;
+                    case 'affirmations':
+                        renderAffirmations();
+                        break;
+                    case 'breathing':
+                        renderBreathingExercise();
+                        break;
+                    case 'crisis':
+                        renderCrisisHelp();
+                        break;
+                    case 'services':
+                        renderServices();
+                        break;
+                    case 'about':
+                        renderAbout();
+                        break;
+                    case 'habit-tracker':
+                        renderHabitTracker();
+                        break;
+                    case 'journal':
+                        renderJournal();
+                        break;
+                    case 'resources':
+                        renderResources();
+                        break;
+                    case 'profile':
+                        renderProfile();
+                        break;
+                    default:
+                        renderHome();
+                        break;
+                }
+            };
+            
+            // Page Render Functions
+            const renderAuthForm = (isLogin) => {
+                const appContent = document.getElementById('app-content');
+                appContent.innerHTML = `
+                    <div class="flex flex-col items-center">
+                        <h2 class="text-2xl font-semibold text-gray-800 mb-4">${isLogin ? 'Login' : 'Sign Up'}</h2>
+                        <form id="auth-form" class="w-full max-w-sm">
+                            <div class="mb-4">
+                                <label class="block text-gray-700 text-sm font-bold mb-2" for="email">Email</label>
+                                <input class="shadow appearance-none border rounded-lg w-full py-2 px-3 text-gray-700 leading-tight focus:outline-none focus:ring-2 focus:ring-indigo-500" id="email" type="email" placeholder="email@example.com" required>
+                            </div>
+                            <div class="mb-6">
+                                <label class="block text-gray-700 text-sm font-bold mb-2" for="password">Password</label>
+                                <input class="shadow appearance-none border rounded-lg w-full py-2 px-3 text-gray-700 leading-tight focus:outline-none focus:ring-2 focus:ring-indigo-500" id="password" type="password" placeholder="********" required>
+                            </div>
+                            <p id="error-message" class="text-red-500 text-xs italic mb-4 hidden"></p>
+                            <div class="flex items-center justify-between">
+                                <button class="bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-2 px-4 rounded-lg focus:outline-none focus:shadow-outline w-full" type="submit">
+                                    ${isLogin ? 'Login' : 'Sign Up'}
+                                </button>
+                            </div>
+                        </form>
+                        <button id="toggle-auth" class="mt-4 text-sm text-indigo-500 hover:underline">
+                            ${isLogin ? "Don't have an account? Sign Up" : "Already have an account? Login"}
+                        </button>
+                    </div>
+                `;
+
+                document.getElementById('auth-form').addEventListener('submit', async (e) => {
+                    e.preventDefault();
+                    const email = document.getElementById('email').value;
+                    const password = document.getElementById('password').value;
+                    const errorMsg = document.getElementById('error-message');
+                    errorMsg.classList.add('hidden');
+                    try {
+                        if (isLogin) {
+                            await firebase.signInWithEmailAndPassword(auth, email, password);
+                        } else {
+                            await firebase.createUserWithEmailAndPassword(auth, email, password);
+                        }
+                    } catch (err) {
+                        errorMsg.textContent = err.message;
+                        errorMsg.classList.remove('hidden');
+                    }
+                });
+
+                document.getElementById('toggle-auth').addEventListener('click', () => renderAuthForm(!isLogin));
+            };
+            
+            const renderHome = () => {
+                const appContent = document.getElementById('app-content');
+                appContent.innerHTML = `
+                    <div class="p-4 text-center">
+                        <div class="mb-6 flex justify-center">
+                            <img src="https://placehold.co/150x150/d1e1f7/4f46e5?text=MindEase" alt="MindEase Logo" class="rounded-full shadow-lg" />
+                        </div>
+                        <h2 class="text-4xl font-extrabold text-indigo-600 mb-2">Welcome to MindEase</h2>
+                        <p class="text-gray-600 text-lg mb-6">Your personal companion for mental well-being, anytime, anywhere.</p>
+                        <div id="daily-insights" class="mb-6">
+                            <!-- Daily insights will be rendered here -->
+                        </div>
+                        <div id="mood-streak" class="mb-6 p-4 bg-yellow-50 rounded-xl shadow-sm flex justify-center items-center">
+                            <!-- Mood streak will be rendered here -->
+                        </div>
+                        <div class="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-8">
+                            <button id="nav-mood" class="flex flex-col items-center justify-center p-4 bg-indigo-50 rounded-xl hover:bg-indigo-100 transition-colors shadow-sm">
+                                <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="h-8 w-8 text-indigo-600 mb-2"><path d="M12 2a10 10 0 1 0 10 10A10 10 0 0 0 12 2Zm-5 7h.01M17 7h.01M16 16c-1.5-1.5-3-2-4-2s-2.5.5-4 2"/></svg>
+                                <span class="text-sm font-medium text-gray-700">Mood</span>
+                            </button>
+                            <button id="nav-chat" class="flex flex-col items-center justify-center p-4 bg-indigo-50 rounded-xl hover:bg-indigo-100 transition-colors shadow-sm">
+                                <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="h-8 w-8 text-indigo-600 mb-2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+                                <span class="text-sm font-medium text-gray-700">Chat</span>
+                            </button>
+                            <button id="nav-affirmations" class="flex flex-col items-center justify-center p-4 bg-indigo-50 rounded-xl hover:bg-indigo-100 transition-colors shadow-sm">
+                                <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="h-8 w-8 text-indigo-600 mb-2"><path d="m12 3-1.8 4.7L5 8.5l5.2 1.8L12 15l1.8-4.7L19 8.5l-5.2-1.8L12 3zM2 21l2-2M20 21l2-2M15 17l-1 1M9 17l-1 1"/></svg>
+                                <span class="text-sm font-medium text-gray-700">Affirmations</span>
+                            </button>
+                            <button id="nav-breathing" class="flex flex-col items-center justify-center p-4 bg-indigo-50 rounded-xl hover:bg-indigo-100 transition-colors shadow-sm">
+                                <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="h-8 w-8 text-indigo-600 mb-2"><path d="M17.5 19.5c-.32 0-.64-.08-1-.18a6.5 6.5 0 0 0-11.5-6.5c-3.1 0-5.5 2.5-5.5 5.5s2.4 5.5 5.5 5.5H19a4 4 0 0 0 0-8c-1.6 0-3 1-3.5 2.5"/></svg>
+                                <span class="text-sm font-medium text-gray-700">Breathe</span>
+                            </button>
+                        </div>
+                        <button id="learn-more" class="px-6 py-3 bg-indigo-600 text-white font-semibold rounded-full hover:bg-indigo-700 transition-colors shadow-lg">
+                            Learn More
+                        </button>
+                    </div>
+                `;
+                document.getElementById('nav-mood').addEventListener('click', () => navigate('mood-tracking'));
+                document.getElementById('nav-chat').addEventListener('click', () => navigate('ai-chat'));
+                document.getElementById('nav-affirmations').addEventListener('click', () => navigate('affirmations'));
+                document.getElementById('nav-breathing').addEventListener('click', () => navigate('breathing'));
+                document.getElementById('learn-more').addEventListener('click', () => navigate('about'));
+                renderNavigation();
+                renderMoodStreak();
+                renderDailySummary();
+            };
+
+            const renderNavigation = () => {
+                const nav = document.getElementById('navigation');
+                nav.innerHTML = `
+                    <button id="nav-home" class="flex flex-col items-center text-gray-500 hover:text-indigo-600 transition-colors">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="h-6 w-6"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
+                        <span class="text-xs mt-1">Home</span>
+                    </button>
+                    <button id="nav-mood-btm" class="flex flex-col items-center text-gray-500 hover:text-indigo-600 transition-colors">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="h-6 w-6"><path d="M12 2a10 10 0 1 0 10 10A10 10 0 0 0 12 2Zm-5 7h.01M17 7h.01M16 16c-1.5-1.5-3-2-4-2s-2.5.5-4 2"/></svg>
+                        <span class="text-xs mt-1">Mood</span>
+                    </button>
+                    <button id="nav-journal-btm" class="flex flex-col items-center text-gray-500 hover:text-indigo-600 transition-colors">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="h-6 w-6"><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><path d="M8 2v4"/><path d="M16 2v4"/><path d="M21 15H3"/></svg>
+                        <span class="text-xs mt-1">Journal</span>
+                    </button>
+                    <button id="nav-habit-btm" class="flex flex-col items-center text-gray-500 hover:text-indigo-600 transition-colors">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="h-6 w-6"><path d="M22 11.08V12a10 10 0 1 1-5.93-8.87"/><path d="M22 4L12 14.01l-3-3"/></svg>
+                        <span class="text-xs mt-1">Habits</span>
+                    </button>
+                    <button id="nav-resources-btm" class="flex flex-col items-center text-gray-500 hover:text-indigo-600 transition-colors">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="h-6 w-6"><path d="M12 2a10 10 0 1 0 10 10A10 10 0 0 0 12 2z"/><path d="M17 12H7"/><path d="M12 7l-5 5 5 5"/></svg>
+                        <span class="text-xs mt-1">Resources</span>
+                    </button>
+                    <button id="nav-profile-btm" class="flex flex-col items-center text-gray-500 hover:text-indigo-600 transition-colors">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="h-6 w-6"><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+                        <span class="text-xs mt-1">Profile</span>
+                    </button>
+                `;
+                document.getElementById('nav-home').addEventListener('click', () => navigate('home'));
+                document.getElementById('nav-mood-btm').addEventListener('click', () => navigate('mood-tracking'));
+                document.getElementById('nav-journal-btm').addEventListener('click', () => navigate('journal'));
+                document.getElementById('nav-habit-btm').addEventListener('click', () => navigate('habit-tracker'));
+                document.getElementById('nav-resources-btm').addEventListener('click', () => navigate('resources'));
+                document.getElementById('nav-profile-btm').addEventListener('click', () => navigate('profile'));
+            };
+
+            const renderMoodTracker = () => {
+                const appContent = document.getElementById('app-content');
+                appContent.innerHTML = `
+                    <div>
+                        <h2 class="text-2xl font-semibold mb-4 text-gray-800">How are you feeling today?</h2>
+                        <div id="mood-selection" class="flex justify-around mb-6">
+                            <button data-mood="happy" class="p-4 rounded-xl text-3xl transition-transform transform hover:scale-110 focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-gray-100">😊</button>
+                            <button data-mood="calm" class="p-4 rounded-xl text-3xl transition-transform transform hover:scale-110 focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-gray-100">😌</button>
+                            <button data-mood="neutral" class="p-4 rounded-xl text-3xl transition-transform transform hover:scale-110 focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-gray-100">😐</button>
+                            <button data-mood="sad" class="p-4 rounded-xl text-3xl transition-transform transform hover:scale-110 focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-gray-100">😞</button>
+                            <button data-mood="anxious" class="p-4 rounded-xl text-3xl transition-transform transform hover:scale-110 focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-gray-100">😰</button>
+                        </div>
+                        <textarea id="journal-input" class="w-full h-24 p-3 rounded-lg border-2 border-gray-300 focus:outline-none focus:border-indigo-500 mb-4" placeholder="Write a few words about your day..."></textarea>
+                        <button id="save-mood-btn" class="w-full bg-indigo-600 text-white font-semibold py-3 px-4 rounded-lg hover:bg-indigo-700 transition-colors" disabled>
+                            Save Mood
+                        </button>
+                        <div class="mt-8">
+                            <h3 class="text-xl font-semibold mb-4 text-gray-800">Your Mood History</h3>
+                            <div id="mood-chart-container" class="h-64 relative">
+                                <canvas id="mood-chart"></canvas>
+                                <p id="no-mood-data" class="text-center text-gray-500 absolute inset-0 flex items-center justify-center hidden">No mood data to display yet. Save your first mood!</p>
+                            </div>
+                        </div>
+                        <div class="mt-8">
+                            <h3 class="text-xl font-semibold mb-4 text-gray-800">Past Entries</h3>
+                            <div id="mood-history" class="h-64 overflow-y-auto space-y-2 p-2 rounded-lg border border-gray-200">
+                                <!-- Mood history will be populated here -->
+                            </div>
+                        </div>
+                    </div>
+                `;
+
+                const moodBtns = document.getElementById('mood-selection').querySelectorAll('button');
+                let selectedMood = null;
+                moodBtns.forEach(btn => {
+                    btn.addEventListener('click', () => {
+                        moodBtns.forEach(b => {
+                            b.classList.remove('bg-indigo-200', 'scale-110', 'shadow-lg');
+                            b.classList.add('bg-gray-100');
+                        });
+                        btn.classList.remove('bg-gray-100');
+                        btn.classList.add('bg-indigo-200', 'scale-110', 'shadow-lg');
+                        selectedMood = btn.dataset.mood;
+                        document.getElementById('save-mood-btn').disabled = false;
+                    });
+                });
+                document.getElementById('save-mood-btn').addEventListener('click', async (e) => {
+                    e.preventDefault();
+                    if (!selectedMood || !db || !userId) {
+                        showMessage("Mood not selected or user not authenticated.");
+                        return;
+                    }
+                    const journal = document.getElementById('journal-input').value;
+                    const moodEntry = {
+                        mood: selectedMood,
+                        moodValue: moodEmojis[selectedMood].value,
+                        journal: journal,
+                        timestamp: new Date().toISOString(),
+                        date: new Date().toLocaleDateString()
+                    };
+                    try {
+                        await firebase.addDoc(firebase.collection(db, `/artifacts/${appId}/users/${userId}/mood_entries`), moodEntry);
+                        document.getElementById('journal-input').value = '';
+                        moodBtns.forEach(b => {
+                            b.classList.remove('bg-indigo-200', 'scale-110', 'shadow-lg');
+                            b.classList.add('bg-gray-100');
+                        });
+                        selectedMood = null;
+                        document.getElementById('save-mood-btn').disabled = true;
+                        showMessage("Mood entry saved!");
+                    } catch (e) {
+                        console.error("Error adding document: ", e);
+                        showMessage("Failed to save mood. Please try again.", 5000);
+                    }
+                });
+
+                if (moodData.length === 0) {
+                    const noDataEl = document.getElementById('no-mood-data');
+                    if (noDataEl) noDataEl.classList.remove('hidden');
+                } else {
+                    updateMoodChart();
+                }
+                renderMoodHistory();
+            };
+            
+            const renderAIChat = () => {
+                const appContent = document.getElementById('app-content');
+                appContent.innerHTML = `
+                    <div class="flex flex-col h-[500px] bg-gray-50 rounded-xl shadow-inner">
+                        <div id="chat-messages" class="flex-1 overflow-y-auto p-4 space-y-4">
+                            <div class="flex justify-center items-center h-full text-gray-500 italic">
+                                Start a conversation to find some peace of mind.
+                            </div>
+                        </div>
+                        <div class="p-4 border-t border-gray-200 flex">
+                            <textarea id="chat-input" class="flex-1 p-3 rounded-lg border-2 border-gray-300 focus:outline-none focus:border-indigo-500 resize-none" placeholder="Type your message..." rows="1"></textarea>
+                            <button id="send-chat-btn" class="ml-2 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors">Send</button>
+                        </div>
+                    </div>
+                `;
+
+                const chatInput = document.getElementById('chat-input');
+                const sendBtn = document.getElementById('send-chat-btn');
+                const chatMessages = document.getElementById('chat-messages');
+                
+                const sendMessage = async () => {
+                    const input = chatInput.value.trim();
+                    if (input === '') return;
+                    
+                    const userMessage = document.createElement('div');
+                    userMessage.className = 'flex justify-end';
+                    userMessage.innerHTML = `<div class="p-3 rounded-2xl max-w-[75%] bg-indigo-600 text-white">${input}</div>`;
+                    chatMessages.appendChild(userMessage);
+
+                    chatInput.value = '';
+                    chatMessages.scrollTop = chatMessages.scrollHeight;
+
+                    const thinkingMessage = document.createElement('div');
+                    thinkingMessage.className = 'flex justify-start';
+                    thinkingMessage.innerHTML = `<div class="p-3 rounded-2xl max-w-[75%] bg-gray-200 text-gray-800 animate-pulse">MindEase is thinking...</div>`;
+                    chatMessages.appendChild(thinkingMessage);
+                    chatMessages.scrollTop = chatMessages.scrollHeight;
+
+                    try {
+                        const prompt = `Analyze the following user input for sentiment and tone, then provide an empathetic and helpful response. The response should be concise and supportive.
+User: ${input}`;
+                        let chatHistory = [];
+                        chatHistory.push({ role: "user", parts: [{ text: prompt }] });
+                        const payload = { contents: chatHistory };
+                        const apiKey = "AIzaSyBIvkRVHfCMeUIWzIPWPfg6wfSQTVcF2t0"; // YOU MUST ADD YOUR API KEY HERE
+                        const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-05-20:generateContent?key=${apiKey}`;
+                        const response = await fetch(apiUrl, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify(payload)
+                        });
+                        const result = await response.json();
+                        chatMessages.removeChild(thinkingMessage);
+
+                        if (result.candidates && result.candidates.length > 0 && result.candidates[0].content && result.candidates[0].content.parts && result.candidates[0].content.parts.length > 0) {
+                            const text = result.candidates[0].content.parts[0].text;
+                            const botMessage = document.createElement('div');
+                            botMessage.className = 'flex justify-start';
+                            botMessage.innerHTML = `<div class="p-3 rounded-2xl max-w-[75%] bg-gray-200 text-gray-800">${text}</div>`;
+                            chatMessages.appendChild(botMessage);
+                        } else {
+                            const errorMessage = document.createElement('div');
+                            errorMessage.className = 'flex justify-start';
+                            errorMessage.innerHTML = `<div class="p-3 rounded-2xl max-w-[75%] bg-red-100 text-red-800">I'm sorry, I couldn't process that.</div>`;
+                            chatMessages.appendChild(errorMessage);
+                        }
+                    } catch (error) {
+                        chatMessages.removeChild(thinkingMessage);
+                        const errorMessage = document.createElement('div');
+                        errorMessage.className = 'flex justify-start';
+                        errorMessage.innerHTML = `<div class="p-3 rounded-2xl max-w-[75%] bg-red-100 text-red-800">I'm sorry, an error occurred.</div>`;
+                        chatMessages.appendChild(errorMessage);
+                    } finally {
+                        chatMessages.scrollTop = chatMessages.scrollHeight;
+                        sendBtn.disabled = false;
+                    }
+                };
+
+                sendBtn.addEventListener('click', sendMessage);
+                chatInput.addEventListener('keydown', (e) => {
+                    if (e.key === 'Enter' && !e.shiftKey) {
+                        e.preventDefault();
+                        sendMessage();
+                    }
+                });
+            };
+            
+            const renderAffirmations = () => {
+                const appContent = document.getElementById('app-content');
+                
+                const allAffirmations = [...defaultAffirmations, ...customAffirmations];
+                const currentAffirmation = allAffirmations.length > 0 ? allAffirmations[Math.floor(Math.random() * allAffirmations.length)] : "Start by adding your own affirmation!";
+
+                appContent.innerHTML = `
+                    <div class="text-center p-4">
+                        <h2 class="text-2xl font-semibold mb-4 text-gray-800">Daily Affirmation</h2>
+                        <div class="relative p-6 bg-gradient-to-r from-indigo-500 to-purple-600 text-white rounded-2xl shadow-xl min-h-[150px] flex items-center justify-center">
+                            <p id="affirmation-text" class="text-xl italic font-light">${currentAffirmation}</p>
+                        </div>
+                        <button id="get-new-affirmation" class="mt-6 px-6 py-3 bg-indigo-600 text-white font-semibold rounded-full hover:bg-indigo-700 transition-colors shadow-lg">
+                            Get New Affirmation
+                        </button>
+
+                        <div class="mt-8">
+                            <h3 class="text-xl font-semibold mb-4 text-gray-800">Add Your Own</h3>
+                            <form id="add-affirmation-form" class="flex flex-col sm:flex-row space-y-2 sm:space-y-0 sm:space-x-2">
+                                <input type="text" id="new-affirmation-input" class="flex-1 p-3 rounded-lg border-2 border-gray-300 focus:outline-none focus:border-indigo-500" placeholder="Type your affirmation here..." required>
+                                <button type="submit" class="px-6 py-3 bg-indigo-600 text-white font-semibold rounded-lg hover:bg-indigo-700 transition-colors">Add</button>
+                            </form>
+                        </div>
+                    </div>
+                `;
+
+                document.getElementById('get-new-affirmation').addEventListener('click', () => {
+                    const allAffirmations = [...defaultAffirmations, ...customAffirmations];
+                    if (allAffirmations.length > 0) {
+                        const newAffirmation = allAffirmations[Math.floor(Math.random() * allAffirmations.length)];
+                        document.getElementById('affirmation-text').textContent = newAffirmation;
+                    }
+                });
+
+                document.getElementById('add-affirmation-form').addEventListener('submit', async (e) => {
+                    e.preventDefault();
+                    const input = document.getElementById('new-affirmation-input');
+                    const newAffirmationText = input.value.trim();
+                    if (newAffirmationText && db && userId) {
+                         try {
+                            await firebase.addDoc(firebase.collection(db, `/artifacts/${appId}/users/${userId}/affirmations`), { text: newAffirmationText });
+                            input.value = '';
+                            showMessage("Affirmation saved!");
+                        } catch (e) {
+                            console.error("Error adding affirmation:", e);
+                            showMessage("Failed to save affirmation.", 5000);
+                        }
+                    }
+                });
+            };
+            
+            const renderBreathingExercise = () => {
+                const appContent = document.getElementById('app-content');
+                appContent.innerHTML = `
+                    <div class="flex flex-col items-center p-4">
+                        <h2 class="text-2xl font-semibold mb-6 text-gray-800">Breathing Exercise</h2>
+                        <div id="breathing-circle" class="relative w-48 h-48 rounded-full flex items-center justify-center bg-indigo-400">
+                            <p id="breathing-stage" class="text-white font-bold text-xl">Breathe In</p>
+                            <p id="breathing-timer" class="absolute bottom-4 text-white text-sm hidden"></p>
+                        </div>
+                        <button id="start-breathing-btn" class="mt-8 px-6 py-3 bg-indigo-600 text-white font-semibold rounded-full hover:bg-indigo-700 transition-colors shadow-lg">
+                            Start Exercise
+                        </button>
+                        <p class="mt-4 text-gray-500 text-sm">Follow the animation and text. This is a 4-2-4 breathing pattern.</p>
+                    </div>
+                `;
+
+                const circle = document.getElementById('breathing-circle');
+                const stageText = document.getElementById('breathing-stage');
+                const timerText = document.getElementById('breathing-timer');
+                const startBtn = document.getElementById('start-breathing-btn');
+                let intervalRef;
+
+                startBtn.addEventListener('click', () => {
+                    startBtn.disabled = true;
+                    timerText.classList.remove('hidden');
+                    let timer = 10;
+                    intervalRef = setInterval(() => {
+                        timer--;
+                        timerText.textContent = `${timer}s`;
+                        if (timer > 6) {
+                            stageText.textContent = 'Breathe In';
+                            circle.classList.remove('scale-75', 'bg-indigo-500');
+                            circle.classList.add('scale-125', 'bg-indigo-400');
+                        } else if (timer > 4) {
+                            stageText.textContent = 'Hold';
+                            circle.classList.remove('scale-125', 'bg-indigo-400');
+                            circle.classList.add('bg-indigo-500');
+                        } else if (timer > 0) {
+                            stageText.textContent = 'Breathe Out';
+                            circle.classList.remove('scale-125', 'bg-indigo-500');
+                            circle.classList.add('scale-75', 'bg-indigo-300');
+                        } else {
+                            clearInterval(intervalRef);
+                            startBtn.disabled = false;
+                            timerText.classList.add('hidden');
+                            stageText.textContent = 'Breathe In';
+                            circle.classList.remove('scale-75', 'bg-indigo-300');
+                            circle.classList.add('bg-indigo-400');
+                        }
+                    }, 1000);
+                });
+            };
+            
+            const renderCrisisHelp = () => {
+                const appContent = document.getElementById('app-content');
+                appContent.innerHTML = `
+                    <div class="p-4">
+                        <h2 class="text-2xl font-semibold mb-4 text-gray-800">Crisis Help</h2>
+                        <p class="text-gray-600 mb-6">
+                            If you are in immediate danger or need urgent help, please contact one of these resources.
+                        </p>
+                        <div class="space-y-4">
+                            <div class="bg-red-50 rounded-xl p-4 shadow-sm">
+                                <h4 class="text-lg font-semibold text-red-700">National Suicide Prevention Lifeline</h4>
+                                <a href="tel:988" class="block text-xl font-bold text-red-600 hover:underline my-1">988</a>
+                                <p class="text-gray-600 text-sm">Provides 24/7 free and confidential support.</p>
+                            </div>
+                            <div class="bg-red-50 rounded-xl p-4 shadow-sm">
+                                <h4 class="text-lg font-semibold text-red-700">Crisis Text Line</h4>
+                                <p class="text-xl font-bold text-red-600 my-1">Text 'HOME' to 741741</p>
+                                <p class="text-gray-600 text-sm">Connects you with a Crisis Counselor for free.</p>
+                            </div>
+                            <div class="bg-red-50 rounded-xl p-4 shadow-sm">
+                                <h4 class="text-lg font-semibold text-red-700">The Trevor Project</h4>
+                                <a href="tel:1-866-488-7386" class="block text-xl font-bold text-red-600 hover:underline my-1">1-866-488-7386</a>
+                                <p class="text-gray-600 text-sm">Support for LGBTQ young people.</p>
+                            </div>
+                        </div>
+                    </div>
+                `;
+            };
+
+            const renderHabitTracker = () => {
+                const appContent = document.getElementById('app-content');
+                appContent.innerHTML = `
+                    <div class="p-4">
+                        <h2 class="text-2xl font-semibold mb-4 text-gray-800">Habit Tracker</h2>
+                        <form id="add-habit-form" class="flex flex-col sm:flex-row space-y-2 sm:space-y-0 sm:space-x-2 mb-6">
+                            <input type="text" id="new-habit-input" class="flex-1 p-3 rounded-lg border-2 border-gray-300 focus:outline-none focus:border-indigo-500" placeholder="e.g., Drink 8 glasses of water" required>
+                            <button type="submit" class="px-6 py-3 bg-indigo-600 text-white font-semibold rounded-lg hover:bg-indigo-700 transition-colors">Add Habit</button>
+                        </form>
+                        <div id="habit-list" class="space-y-4">
+                            <!-- Habits will be rendered here -->
+                        </div>
+                    </div>
+                `;
+
+                const addHabitForm = document.getElementById('add-habit-form');
+                const newHabitInput = document.getElementById('new-habit-input');
+                const habitListEl = document.getElementById('habit-list');
+
+                addHabitForm.addEventListener('submit', async (e) => {
+                    e.preventDefault();
+                    const newHabitText = newHabitInput.value.trim();
+                    if (newHabitText && db && userId) {
+                        try {
+                            await firebase.addDoc(firebase.collection(db, `/artifacts/${appId}/users/${userId}/habits`), { name: newHabitText });
+                            newHabitInput.value = '';
+                            showMessage("Habit added successfully!");
+                        } catch (e) {
+                            console.error("Error adding habit:", e);
+                            showMessage("Failed to add habit.", 5000);
+                        }
+                    }
+                });
+
+                const renderHabitList = () => {
+                    if (habits.length === 0) {
+                        habitListEl.innerHTML = `<p class="text-center text-gray-500">No habits added yet. Add your first habit above!</p>`;
+                    } else {
+                        habitListEl.innerHTML = habits.map(habit => {
+                            const isCompleted = habit.completed;
+                            const buttonClass = isCompleted ? 'bg-green-500 hover:bg-green-600' : 'bg-indigo-600 hover:bg-indigo-700';
+                            const buttonText = isCompleted ? `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="text-white"><polyline points="20 6 9 17 4 12"/></svg>` : `Mark Done`;
+                            return `
+                                <div class="p-4 bg-indigo-50 rounded-xl shadow-sm flex items-center justify-between">
+                                    <span class="text-lg font-medium text-gray-700">${habit.name}</span>
+                                    <button data-habit-id="${habit.id}" class="toggle-habit-btn px-4 py-2 text-white font-semibold rounded-lg transition-colors ${buttonClass}">
+                                        ${buttonText}
+                                    </button>
+                                </div>
+                            `;
+                        }).join('');
+                    }
+
+                    habitListEl.querySelectorAll('.toggle-habit-btn').forEach(btn => {
+                        btn.addEventListener('click', async (e) => {
+                            const habitId = e.target.dataset.habitId;
+                            const today = new Date().toISOString().split('T')[0];
+                            const habitRef = firebase.doc(db, `/artifacts/${appId}/users/${userId}/habits/${habitId}/entries/${today}`);
+                            const habitToUpdate = habits.find(h => h.id === habitId);
+
+                            try {
+                                if (habitToUpdate.completed) {
+                                    await firebase.setDoc(habitRef, { completed: false, timestamp: new Date().toISOString() });
+                                    showMessage("Habit marked as incomplete.");
+                                } else {
+                                    await firebase.setDoc(habitRef, { completed: true, timestamp: new Date().toISOString() });
+                                    showMessage("Habit marked as done for today!");
+                                }
+                            } catch (error) {
+                                console.error("Error toggling habit:", error);
+                                showMessage("Failed to update habit status.", 5000);
+                            }
+                        });
+                    });
+                };
+                renderHabitList();
+            };
+
+            const renderJournal = () => {
+                const appContent = document.getElementById('app-content');
+                appContent.innerHTML = `
+                    <div class="p-4">
+                        <h2 class="text-2xl font-semibold mb-4 text-gray-800">Daily Journal</h2>
+                        <form id="journal-form" class="flex flex-col space-y-4 mb-6">
+                            <textarea id="journal-input" class="w-full h-40 p-3 rounded-lg border-2 border-gray-300 focus:outline-none focus:border-indigo-500" placeholder="What's on your mind today?"></textarea>
+                            <button type="submit" class="px-6 py-3 bg-indigo-600 text-white font-semibold rounded-lg hover:bg-indigo-700 transition-colors">Save Journal</button>
+                        </form>
+                        <div class="mt-8">
+                            <h3 class="text-xl font-semibold mb-4 text-gray-800">Keywords from Your Entries</h3>
+                            <div id="word-cloud-container" class="word-cloud-container">
+                                <p class="text-center text-gray-500">No journal entries yet.</p>
+                            </div>
+                        </div>
+                    </div>
+                `;
+
+                const journalForm = document.getElementById('journal-form');
+                const journalInput = document.getElementById('journal-input');
+                journalForm.addEventListener('submit', async (e) => {
+                    e.preventDefault();
+                    const entryText = journalInput.value.trim();
+                    if (entryText && db && userId) {
+                        try {
+                            await firebase.addDoc(firebase.collection(db, `/artifacts/${appId}/users/${userId}/journal`), { text: entryText, timestamp: new Date().toISOString() });
+                            journalInput.value = '';
+                            showMessage("Journal entry saved!");
+                        } catch (e) {
+                            console.error("Error saving journal entry:", e);
+                            showMessage("Failed to save entry.", 5000);
+                        }
+                    }
+                });
+
+                if (journalEntries.length > 0) {
+                    const allText = journalEntries.map(e => e.text).join(' ');
+                    generateWordCloud(allText);
+                } else {
+                    const wordCloudContainer = document.getElementById('word-cloud-container');
+                    if(wordCloudContainer) {
+                         wordCloudContainer.innerHTML = `<p class="text-center text-gray-500">No journal entries yet.</p>`;
+                    }
+                }
+            };
+            
+            const renderResources = () => {
+                const appContent = document.getElementById('app-content');
+                appContent.innerHTML = `
+                    <div class="p-4">
+                        <h2 class="text-2xl font-semibold mb-4 text-gray-800">Helpful Resources</h2>
+                        <div class="space-y-6">
+                            <div>
+                                <h3 class="text-xl font-semibold text-gray-700 mb-2">Articles & Blogs</h3>
+                                <div class="space-y-2">
+                                    <a href="https://www.verywellmind.com/the-benefits-of-mindfulness-5205137/" target="_blank" rel="noopener noreferrer" class="block bg-indigo-50 p-4 rounded-xl shadow-sm hover:bg-indigo-100 transition-colors">
+                                        <h4 class="font-medium text-indigo-700">Mindfulness for Mental Health</h4>
+                                        <p class="text-sm text-gray-600 mt-1">An article from Mind on the benefits of mindfulness.</p>
+                                    </a>
+                                    <a href="https://hola.health/health-info/mental-health/how-to-journal-for-mental-health-expert-tips-and-strategies/" target="_blank" rel="noopener noreferrer" class="block bg-indigo-50 p-4 rounded-xl shadow-sm hover:bg-indigo-100 transition-colors">
+                                        <h4 class="font-medium text-indigo-700">How to Start a Daily Journal</h4>
+                                        <p class="text-sm text-gray-600 mt-1">A guide on how to begin your journaling journey.</p>
+                                    </a>
+                                </div>
+                            </div>
+
+                            <div>
+                                <h3 class="text-xl font-semibold text-gray-700 mb-2">Books & Reading</h3>
+                                <div class="space-y-2">
+                                    <a href="https://www.goodreads.com/book/show/6708.The_Power_of_Now?ref=nav_sb_ss_1_12" target="_blank" rel="noopener noreferrer" class="block bg-indigo-50 p-4 rounded-xl shadow-sm hover:bg-indigo-100 transition-colors">
+                                        <h4 class="font-medium text-indigo-700">The Power of Now by Eckhart Tolle</h4>
+                                        <p class="text-sm text-gray-600 mt-1">A guide to living in the present moment.</p>
+                                    </a>
+                                    <a href="https://www.goodreads.com/book/show/28257707-the-subtle-art-of-not-giving-a-f-ck?ref=nav_sb_ss_1_14" target="_blank" rel="noopener noreferrer" class="block bg-indigo-50 p-4 rounded-xl shadow-sm hover:bg-indigo-100 transition-colors">
+                                        <h4 class="font-medium text-indigo-700">The Subtle Art of Not Giving a F*ck by Mark Manson</h4>
+                                        <p class="text-sm text-gray-600 mt-1">A counterintuitive approach to living a good life.</p>
+                                    </a>
+                                </div>
+                            </div>
+
+                            <div>
+                                <h3 class="text-xl font-semibold text-gray-700 mb-2">Guided Meditations & Videos</h3>
+                                <div class="space-y-2">
+                                    <a href="https://www.youtube.com/watch?v=H_uc-uQ3Nkc&t=2s" target="_blank" rel="noopener noreferrer" class="block bg-indigo-50 p-4 rounded-xl shadow-sm hover:bg-indigo-100 transition-colors">
+                                        <h4 class="font-medium text-indigo-700">10-Minute Guided Meditation for Anxiety</h4>
+                                        <p class="text-sm text-gray-600 mt-1">A soothing video to help calm your mind.</p>
+                                    </a>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                `;
+            };
+            
+            const renderServices = () => {
+                const appContent = document.getElementById('app-content');
+                appContent.innerHTML = `
+                    <div class="p-4">
+                        <h2 class="text-2xl font-semibold mb-6 text-gray-800">Our Services</h2>
+                        <div class="space-y-4">
+                            <div class="bg-indigo-50 rounded-xl p-4 shadow-sm flex items-center">
+                                <svg xmlns="http://www.w3.org/2000/svg" width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="text-indigo-600 flex-shrink-0 mr-4"><path d="M12 2a10 10 0 1 0 10 10A10 10 0 0 0 12 2Zm-5 7h.01M17 7h.01M16 16c-1.5-1.5-3-2-4-2s-2.5.5-4 2"/></svg>
+                                <div>
+                                    <h3 class="text-xl font-semibold text-indigo-700">Mood Tracking</h3>
+                                    <p class="text-gray-600 mt-2">Log your daily feelings with a simple tap and visualize your emotional trends over time.</p>
+                                </div>
+                            </div>
+                            <div class="bg-indigo-50 rounded-xl p-4 shadow-sm flex items-center">
+                                <svg xmlns="http://www.w3.org/2000/svg" width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="text-indigo-600 flex-shrink-0 mr-4"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+                                <div>
+                                    <h3 class="text-xl font-semibold text-indigo-700">AI Chat Support</h3>
+                                    <p class="text-gray-600 mt-2">A guided conversational bot to help you explore your thoughts and feelings in a private space.</p>
+                                </div>
+                            </div>
+                            <div class="bg-indigo-50 rounded-xl p-4 shadow-sm flex items-center">
+                                <svg xmlns="http://www.w3.org/2000/svg" width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="text-indigo-600 flex-shrink-0 mr-4"><path d="m12 3-1.8 4.7L5 8.5l5.2 1.8L12 15l1.8-4.7L19 8.5l-5.2-1.8L12 3zM2 21l2-2M20 21l2-2M15 17l-1 1M9 17l-1 1"/></svg>
+                                <div>
+                                    <h3 class="text-xl font-semibold text-indigo-700">Daily Affirmations</h3>
+                                    <p class="text-gray-600 mt-2">Receive new, positive affirmations every day to help build a growth mindset.</p>
+                                </div>
+                            </div>
+                            <div class="bg-indigo-50 rounded-xl p-4 shadow-sm flex items-center">
+                                <svg xmlns="http://www.w3.org/2000/svg" width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="text-indigo-600 flex-shrink-0 mr-4"><path d="M17.5 19.5c-.32 0-.64-.08-1-.18a6.5 6.5 0 0 0-11.5-6.5c-3.1 0-5.5 2.5-5.5 5.5s2.4 5.5 5.5 5.5H19a4 4 0 0 0 0-8c-1.6 0-3 1-3.5 2.5"/></svg>
+                                <div>
+                                    <h3 class="text-xl font-semibold text-indigo-700">Breathing Exercises</h3>
+                                    <p class="text-gray-600 mt-2">Animated, guided breathing exercises to help you calm down and find focus.</p>
+                                </div>
+                            </div>
+                            <div class="bg-red-50 rounded-xl p-4 shadow-sm flex items-center">
+                                <svg xmlns="http://www.w3.org/2000/svg" width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="text-red-700 flex-shrink-0 mr-4"><path d="M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.84 0-3.52 1.28-4.5 3.2C10.52 4.28 8.84 3 7 3A5.5 5.5 0 0 0 2 8.5c0 2.29 1.51 4.04 3 5.5l7 7z"/><path d="M3.22 12H7a2 2 0 0 1 2 2v2.5M16 14h-2.5a2 2 0 0 1-2-2"/></svg>
+                                <div>
+                                    <h3 class="text-xl font-semibold text-red-700">Crisis Help</h3>
+                                    <p class="text-gray-600 mt-2">Quick access to a list of emergency and crisis help resources.</p>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                `;
+            };
+
+            const renderAbout = () => {
+                const appContent = document.getElementById('app-content');
+                appContent.innerHTML = `
+                    <div class="p-4 text-center">
+                        <div class="mb-6 flex justify-center">
+                            <img src="https://placehold.co/150x150/d1e1f7/4f46e5?text=About" alt="About Icon" class="rounded-full shadow-lg" />
+                        </div>
+                        <h2 class="text-2xl font-semibold mb-4 text-gray-800">About MindEase</h2>
+                        <p class="text-gray-600 mb-4">MindEase is a Progressive Web App designed to be your personal mental health companion. Our mission is to provide you with tools and resources to support your well-being, anytime and anywhere.</p>
+                        <p class="text-gray-600 mb-4">By offering features like mood tracking, AI chat, and breathing exercises, we hope to empower you on your journey toward a healthier and more balanced mind.</p>
+                        <p class="text-gray-600 font-bold">Thank you for being here.</p>
+                    </div>
+                `;
+            };
+            
+            const renderProfile = () => {
+                const appContent = document.getElementById('app-content');
+                const userEmail = auth.currentUser?.email || 'N/A';
+                const userIdDisplay = auth.currentUser?.uid || 'N/A';
+                const userName = userProfile.name || 'N/A';
+                
+                appContent.innerHTML = `
+                    <div class="p-4">
+                        <div class="text-center">
+                            <img src="https://placehold.co/100x100/d1e1f7/4f46e5?text=${userName.charAt(0).toUpperCase()}" alt="User Profile" class="rounded-full shadow-lg mx-auto mb-4" />
+                            <h2 id="user-profile-name" class="text-2xl font-semibold text-gray-800 mb-2">Hello, ${userName}!</h2>
+                            <p class="text-sm text-gray-500 mb-6">User ID: ${userIdDisplay}</p>
+                        </div>
+                        
+                        <div class="mt-8">
+                            <h3 class="text-xl font-semibold mb-4 text-gray-800">Update Profile</h3>
+                            <form id="profile-form" class="flex items-center space-x-2">
+                                <label for="display-name-input" class="sr-only">Display Name</label>
+                                <input type="text" id="display-name-input" class="flex-1 p-3 rounded-lg border-2 border-gray-300 focus:outline-none focus:border-indigo-500" placeholder="Enter a name" value="${userProfile.name || ''}" required>
+                                <button type="submit" id="save-name-btn" class="px-4 py-3 bg-indigo-600 text-white font-semibold rounded-lg hover:bg-indigo-700 transition-colors">Save</button>
+                            </form>
+                        </div>
+                        
+                        <div id="badges-container" class="mt-8">
+                            <!-- Badges will be rendered here -->
+                        </div>
+
+                        <div class="mt-8">
+                            <h3 class="text-xl font-semibold mb-4 text-gray-800">App Statistics</h3>
+                            <div class="grid grid-cols-2 gap-4">
+                                <div class="bg-gray-50 rounded-xl p-4 shadow-sm text-center">
+                                    <h4 class="text-2xl font-bold text-indigo-600">${moodData.length}</h4>
+                                    <p class="text-sm text-gray-700">Moods Logged</p>
+                                </div>
+                                <div class="bg-gray-50 rounded-xl p-4 shadow-sm text-center">
+                                    <h4 class="text-2xl font-bold text-indigo-600">${journalEntries.length}</h4>
+                                    <p class="text-sm text-gray-700">Journal Entries</p>
+                                </div>
+                                <div class="bg-gray-50 rounded-xl p-4 shadow-sm text-center">
+                                    <h4 class="text-2xl font-bold text-indigo-600">${calculateMoodStreak()}</h4>
+                                    <p class="text-sm text-gray-700">Longest Streak</p>
+                                </div>
+                                <div class="bg-gray-50 rounded-xl p-4 shadow-sm text-center">
+                                    <h4 class="text-2xl font-bold text-indigo-600">${habits.length}</h4>
+                                    <p class="text-sm text-gray-700">Habits Tracked</p>
+                                </div>
+                            </div>
+                        </div>
+
+                        ${isEmailUser ? `
+                            <div class="mt-8">
+                                <h3 class="text-xl font-semibold mb-4 text-gray-800">Account Management</h3>
+                                <div class="bg-gray-50 rounded-xl p-4 shadow-sm">
+                                    <button id="change-password-btn" class="w-full text-left font-medium text-indigo-600 hover:text-indigo-700 transition-colors">Change Password</button>
+                                </div>
+                            </div>
+                        ` : ''}
+
+                        <div class="mt-8">
+                            <h3 class="text-xl font-semibold mb-4 text-gray-800">Export Your Data</h3>
+                            <button id="export-data-btn" class="w-full px-6 py-3 bg-gray-200 text-gray-800 font-semibold rounded-lg hover:bg-gray-300 transition-colors">Export Data as JSON</button>
+                        </div>
+                    </div>
+                `;
+                
+                const saveNameBtn = document.getElementById('save-name-btn');
+                const displayNameInput = document.getElementById('display-name-input');
+                const profileForm = document.getElementById('profile-form');
+                
+                profileForm.addEventListener('submit', async (e) => {
+                    e.preventDefault();
+                    const displayName = displayNameInput.value.trim();
+                    if (displayName && db && userId) {
+                        try {
+                            const profileRef = firebase.doc(db, `/artifacts/${appId}/users/${userId}/profile`, 'details');
+                            await firebase.setDoc(profileRef, { name: displayName }, { merge: true });
+                            showMessage("Display name saved!");
+                            // Update the button text
+                            saveNameBtn.textContent = 'Edit';
+                            saveNameBtn.classList.add('px-4');
+                            saveNameBtn.classList.remove('px-6');
+                        } catch (e) {
+                            console.error("Error saving display name:", e);
+                            showMessage("Failed to save display name.", 5000);
+                        }
+                    }
+                });
+
+                if (userProfile.name) {
+                    saveNameBtn.textContent = 'Edit';
+                    saveNameBtn.classList.add('px-4');
+                    saveNameBtn.classList.remove('px-6');
+                } else {
+                    saveNameBtn.textContent = 'Save Name';
+                    saveNameBtn.classList.add('px-6');
+                    saveNameBtn.classList.remove('px-4');
+                }
+
+                if(document.getElementById('change-password-btn')) {
+                    document.getElementById('change-password-btn').addEventListener('click', async () => {
+                         const newPassword = prompt("Please enter your new password:");
+                         if(newPassword) {
+                             const user = auth.currentUser;
+                             try {
+                                 await firebase.updatePassword(user, newPassword);
+                                 showMessage("Password updated successfully!");
+                             } catch(error) {
+                                 console.error("Error updating password:", error);
+                                 showMessage(`Error updating password: ${error.message}`, 8000);
+                             }
+                         }
+                    });
+                }
+                
+                document.getElementById('export-data-btn').addEventListener('click', async () => {
+                    if (!userId || !db) {
+                        showMessage("User not authenticated.");
+                        return;
+                    }
+                    showMessage("Exporting data...", 2000);
+
+                    const data = {
+                        moodEntries: [],
+                        affirmations: [],
+                        habits: [],
+                        journalEntries: [],
+                    };
+
+                    try {
+                        const moodSnapshot = await firebase.getDocs(firebase.collection(db, `/artifacts/${appId}/users/${userId}/mood_entries`));
+                        moodSnapshot.forEach(doc => data.moodEntries.push(doc.data()));
+
+                        const affSnapshot = await firebase.getDocs(firebase.collection(db, `/artifacts/${appId}/users/${userId}/affirmations`));
+                        affSnapshot.forEach(doc => data.affirmations.push(doc.data()));
+
+                        const habitSnapshot = await firebase.getDocs(firebase.collection(db, `/artifacts/${appId}/users/${userId}/habits`));
+                        for (const doc of habitSnapshot.docs) {
+                            const habit = doc.data();
+                            habit.entries = [];
+                            const entriesSnapshot = await firebase.getDocs(firebase.collection(db, `/artifacts/${appId}/users/${userId}/habits/${doc.id}/entries`));
+                            entriesSnapshot.forEach(entryDoc => habit.entries.push(entryDoc.data()));
+                            data.habits.push(habit);
+                        }
+
+                        const journalSnapshot = await firebase.getDocs(firebase.collection(db, `/artifacts/${appId}/users/${userId}/journal`));
+                        journalSnapshot.forEach(doc => data.journalEntries.push(doc.data()));
+
+                        const json = JSON.stringify(data, null, 2);
+                        const blob = new Blob([json], { type: 'application/json' });
+                        const url = URL.createObjectURL(blob);
+                        const a = document.createElement('a');
+                        a.href = url;
+                        a.download = `mindease-data-${new Date().toISOString().split('T')[0]}.json`;
+                        a.click();
+                        URL.revokeObjectURL(url);
+                        showMessage("Data exported successfully!");
+
+                    } catch (e) {
+                        console.error("Error exporting data:", e);
+                        showMessage("Failed to export data.", 5000);
+                    }
+                });
+
+                renderBadges();
+            };
+
+
+            document.getElementById('logout-btn').addEventListener('click', () => firebase.signOut(auth));
+
+            // Start the application
+            initFirebase();
+        });
+    </script>
+</body>
+</html>
